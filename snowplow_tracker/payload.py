@@ -1,7 +1,7 @@
 """
     payload.py
 
-    Copyright (c) 2013-2020 Snowplow Analytics Ltd. All rights reserved.
+    Copyright (c) 2013-2021 Snowplow Analytics Ltd. All rights reserved.
 
     This program is licensed to you under the Apache License Version 2.0,
     and you may not use this file except in compliance with the Apache License
@@ -15,7 +15,7 @@
     language governing permissions and limitations there under.
 
     Authors: Anuj More, Alex Dean, Fred Blundun, Paul Boocock
-    Copyright: Copyright (c) 2013-2020 Snowplow Analytics Ltd
+    Copyright: Copyright (c) 2013-2021 Snowplow Analytics Ltd
     License: Apache License Version 2.0
 """
 
@@ -63,7 +63,7 @@ class Payload:
             self.add(f, dict_[f])
 
     @contract
-    def add_json(self, dict_, encode_base64, type_when_encoded, type_when_not_encoded):
+    def add_json(self, dict_, encode_base64, type_when_encoded, type_when_not_encoded, json_encoder=None):
         """
             Add an encoded or unencoded JSON to the payload
 
@@ -75,17 +75,19 @@ class Payload:
             :type   type_when_encoded:      string
             :param  type_when_not_encoded:  Name of the field when encode_base64 is not set
             :type   type_when_not_encoded:  string
+            :param json_encoder:            Custom JSON serializer that gets called on non-serializable object
+            :type  json_encoder:            function | None
         """
 
         if dict_ is not None and dict_ != {}:
 
-            json_dict = json.dumps(dict_, ensure_ascii=False)
+            json_dict = json.dumps(dict_, ensure_ascii=False, default=json_encoder)
 
             if encode_base64:
                 encoded_dict = base64.urlsafe_b64encode(json_dict.encode("utf-8"))
                 if not isinstance(encoded_dict, str):
                     encoded_dict = encoded_dict.decode("utf-8")
-                self.add(type_when_encoded, encoded_dict)                
+                self.add(type_when_encoded, encoded_dict)
 
             else:
                 self.add(type_when_not_encoded, json_dict)
