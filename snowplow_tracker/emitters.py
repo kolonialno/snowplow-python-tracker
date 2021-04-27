@@ -1,7 +1,7 @@
 """
     emitters.py
 
-    Copyright (c) 2013-2020 Snowplow Analytics Ltd. All rights reserved.
+    Copyright (c) 2013-2021 Snowplow Analytics Ltd. All rights reserved.
 
     This program is licensed to you under the Apache License Version 2.0,
     and you may not use this file except in compliance with the Apache License
@@ -15,14 +15,20 @@
     language governing permissions and limitations there under.
 
     Authors: Anuj More, Alex Dean, Fred Blundun, Paul Boocock
-    Copyright: Copyright (c) 2013-2020 Snowplow Analytics Ltd
+    Copyright: Copyright (c) 2013-2021 Snowplow Analytics Ltd
     License: Apache License Version 2.0
 """
 
+
+import sys
 import json
 import logging
 import time
 import threading
+import requests
+from contracts import contract, new_contract
+from snowplow_tracker.self_describing_json import SelfDescribingJson
+
 try:
     # Python 2
     from Queue import Queue
@@ -30,26 +36,20 @@ except ImportError:
     # Python 3
     from queue import Queue
 
-from celery import Celery
-import redis
-import requests
-from contracts import contract, new_contract
-
-from snowplow_tracker.self_describing_json import SelfDescribingJson
-
+# logging
+logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 DEFAULT_MAX_LENGTH = 10
 PAYLOAD_DATA_SCHEMA = "iglu:com.snowplowanalytics.snowplow/payload_data/jsonschema/1-0-4"
 
+# contracts
 new_contract("protocol", lambda x: x == "http" or x == "https")
 
 new_contract("method", lambda x: x == "get" or x == "post")
 
 new_contract("function", lambda x: hasattr(x, "__call__"))
-
-new_contract("redis", lambda x: isinstance(x, (redis.Redis, redis.StrictRedis)))
 
 
 class Emitter(object):
@@ -120,6 +120,9 @@ class Emitter(object):
             :type  method:    method
             :rtype:           string
         """
+        if len(endpoint) < 1:
+            raise ValueError("No endpoint provided.")
+
         if method == "get":
             path = "/i"
         else:
@@ -143,12 +146,21 @@ class Emitter(object):
                 self.bytes_queued += len(str(payload))
 
             if self.method == "post":
-                self.buffer.append({key: str(payload[key]) for key in payload})
+                self.buffer.append({key: Emitter.to_str(payload[key]) for key in payload})
             else:
                 self.buffer.append(payload)
 
             if self.reached_limit():
                 self.flush()
+
+    @staticmethod
+    def to_str(x):
+        pyVersion = sys.version_info[0]
+        if pyVersion < 3:
+            if isinstance(x, basestring):
+                return x
+            return str(x)
+        return str(x)
 
     def reached_limit(self):
         """
@@ -179,9 +191,15 @@ class Emitter(object):
         """
         logger.info("Sending POST request to %s..." % self.endpoint)
         logger.debug("Payload: %s" % data)
-        r = requests.post(self.endpoint, data=data, headers={'content-type': 'application/json; charset=utf-8'})
-        getattr(logger, "info" if self.is_good_status_code(r.status_code) else "warn")("POST request finished with status code: " + str(r.status_code))
-        return r
+        post_succeeded = False
+        try:
+            r = requests.post(self.endpoint, data=data, headers={'Content-Type': 'application/json; charset=utf-8'})
+            post_succeeded= Emitter.is_good_status_code(r.status_code)
+            getattr(logger, "info" if post_succeeded else "warning")("POST request finished with status code: " + str(r.status_code))
+        except requests.RequestException as e:
+            logger.warning(e)
+
+        return post_succeeded
 
     @contract
     def http_get(self, payload):
@@ -191,9 +209,15 @@ class Emitter(object):
         """
         logger.info("Sending GET request to %s..." % self.endpoint)
         logger.debug("Payload: %s" % payload)
-        r = requests.get(self.endpoint, params=payload)
-        getattr(logger, "info" if self.is_good_status_code(r.status_code) else "warn")("GET request finished with status code: " + str(r.status_code))
-        return r
+        get_succeeded = False
+        try:
+            r = requests.get(self.endpoint, params=payload)
+            get_succeeded = Emitter.is_good_status_code(r.status_code)
+            getattr(logger, "info" if get_succeeded else "warning")("GET request finished with status code: " + str(r.status_code))
+        except requests.RequestException as e:
+            logger.warning(e)
+
+        return get_succeeded
 
     def sync_flush(self):
         """
@@ -221,41 +245,33 @@ class Emitter(object):
             :type  evts: list(dict(string:*))
         """
         if len(evts) > 0:
-            logger.info("Attempting to send %s requests" % len(evts))
+            logger.info("Attempting to send %s events" % len(evts))
+
             Emitter.attach_sent_timestamp(evts)
+            success_events = []
+            failure_events = []
+
             if self.method == 'post':
                 data = SelfDescribingJson(PAYLOAD_DATA_SCHEMA, evts).to_string()
-                post_succeeded = False
-                try:
-                    status_code = self.http_post(data).status_code
-                    post_succeeded = self.is_good_status_code(status_code)
-                except requests.RequestException as e:
-                    logger.warn(e)
-                if post_succeeded:
-                    if self.on_success is not None:
-                        self.on_success(len(evts))
-                elif self.on_failure is not None:
-                    self.on_failure(0, evts)
+                request_succeeded = self.http_post(data)
+                if request_succeeded:
+                    success_events += evts
+                else:
+                    failure_events += evts
 
             elif self.method == 'get':
-                success_count = 0
-                unsent_requests = []
                 for evt in evts:
-                    get_succeeded = False
-                    try:
-                        status_code = self.http_get(evt).status_code
-                        get_succeeded = self.is_good_status_code(status_code)
-                    except requests.RequestException as e:
-                        logger.warn(e)
-                    if get_succeeded:
-                        success_count += 1
+                    request_succeeded = self.http_get(evt)
+                    if request_succeeded:
+                        success_events += [evt]
                     else:
-                        unsent_requests.append(evt)
-                if len(unsent_requests) == 0:
-                    if self.on_success is not None:
-                        self.on_success(success_count)
-                elif self.on_failure is not None:
-                    self.on_failure(success_count, unsent_requests)
+                        failure_events += [evt]
+
+            if self.on_success is not None and len(success_events) > 0:
+                self.on_success(success_events)
+            if self.on_failure is not None and len(failure_events) > 0:
+                self.on_failure(len(success_events), failure_events)
+
         else:
             logger.info("Skipping flush since buffer is empty")
 
@@ -373,70 +389,3 @@ class AsyncEmitter(Emitter):
             evts = self.queue.get()
             self.send_events(evts)
             self.queue.task_done()
-
-
-class CeleryEmitter(Emitter):
-    """
-        Uses a Celery worker to send HTTP requests asynchronously.
-        Works like the base Emitter class,
-        but on_success and on_failure callbacks cannot be set.
-    """
-    celery_app = None
-
-    def __init__(self, endpoint, protocol="http", port=None, method="get", buffer_size=None, byte_limit=None):
-        super(CeleryEmitter, self).__init__(endpoint, protocol, port, method, buffer_size, None, None, byte_limit)
-
-        try:
-            # Check whether a custom Celery configuration module named "snowplow_celery_config" exists
-            import snowplow_celery_config
-            self.celery_app = Celery()
-            self.celery_app.config_from_object(snowplow_celery_config)
-        except ImportError:
-            # Otherwise configure Celery with default settings
-            self.celery_app = Celery("Snowplow", broker="redis://guest@localhost//")
-
-        self.async_flush = self.celery_app.task(self.async_flush)
-
-    def flush(self):
-        """
-            Schedules a flush task
-        """
-        self.async_flush.delay()
-        logger.info("Scheduled a Celery task to flush the event queue")
-
-    def async_flush(self):
-        super(CeleryEmitter, self).flush()
-
-
-class RedisEmitter(object):
-    """
-        Sends Snowplow events to a Redis database
-    """
-    @contract
-    def __init__(self, rdb=None, key="snowplow"):
-        """
-            :param rdb:  Optional custom Redis database
-            :type  rdb:  redis | None
-            :param key:  The Redis key for the list of events
-            :type  key:  string
-        """
-        if rdb is None:
-            rdb = redis.StrictRedis()
-        self.rdb = rdb
-        self.key = key
-
-    @contract
-    def input(self, payload):
-        """
-            :param payload:  The event properties
-            :type  payload:  dict(string:*)
-        """
-        logger.debug("Pushing event to Redis queue...")
-        self.rdb.rpush(self.key, json.dumps(payload))
-        logger.info("Finished sending event to Redis.")
-
-    def flush(self):
-        logger.warn("The RedisEmitter class does not need to be flushed")
-
-    def sync_flush(self):
-        self.flush()
