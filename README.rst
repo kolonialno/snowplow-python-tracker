@@ -1,5 +1,5 @@
 ======================================================
-Python Analytics for Snowplow
+Python Analytics for Snowplow [Deprecated]
 ======================================================
 .. image:: https://img.shields.io/static/v1?style=flat&label=Snowplow&message=Early%20Release&color=014477&labelColor=9ba0aa&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAMAAAAoLQ9TAAAAeFBMVEVMaXGXANeYANeXANZbAJmXANeUANSQAM+XANeMAMpaAJhZAJeZANiXANaXANaOAM2WANVnAKWXANZ9ALtmAKVaAJmXANZaAJlXAJZdAJxaAJlZAJdbAJlbAJmQAM+UANKZANhhAJ+EAL+BAL9oAKZnAKVjAKF1ALNBd8J1AAAAKHRSTlMAa1hWXyteBTQJIEwRgUh2JjJon21wcBgNfmc+JlOBQjwezWF2l5dXzkW3/wAAAHpJREFUeNokhQOCA1EAxTL85hi7dXv/E5YPCYBq5DeN4pcqV1XbtW/xTVMIMAZE0cBHEaZhBmIQwCFofeprPUHqjmD/+7peztd62dWQRkvrQayXkn01f/gWp2CrxfjY7rcZ5V7DEMDQgmEozFpZqLUYDsNwOqbnMLwPAJEwCopZxKttAAAAAElFTkSuQmCC
     :alt: Early Release
@@ -22,6 +22,11 @@ Python Analytics for Snowplow
 .. image:: https://img.shields.io/pypi/dm/snowplow-tracker
     :alt: Monthly Downloads
     :target: https://pypi.org/project/snowplow-tracker/
+
+Deprecated
+########################
+Recommend using the original Python SDK as they recently updated the dependency issue we had.
+
 
 Update Package (Gemfury)
 ########################
